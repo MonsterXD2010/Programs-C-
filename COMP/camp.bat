@@ -1,3 +1,3 @@
 @echo off
-co main.txt -o ../EMU/rom.bin
+co main.asm -o ../EMU/rom.bin
 pause
