@@ -3,13 +3,24 @@
 #include <bitset>
 #include <iomanip>
 #include "libgame.h"
+#include "memC.h"
 
 bool FLAGS [4] = {0,0,0,0};
-uint8_t REJ_D = 0;
 uint8_t REJ_ABC [4] = {0,0,0,0};
 uint8_t REJ_XY [2] = {0,0};
 uint8_t REJ_IO = 0;
 uint16_t DIR = 0;
+uint16_t PIL[16] = {0};
+
+uint8_t YQS(uint8_t D,uint8_t DE,uint8_t REJ){
+    if(D == 0 || DE ==  1){
+        return (REJ << 1);
+    }else if(D == 1 || DE == 2){
+        return (REJ >> 1);
+    }
+    return REJ;
+}
+
 
 uint8_t ALU(uint8_t OP,uint8_t DA,uint8_t DB,uint8_t des,bool no){
     uint16_t OC;
@@ -53,88 +64,94 @@ uint8_t ALU(uint8_t OP,uint8_t DA,uint8_t DB,uint8_t des,bool no){
     else FLAGS[2] = 0;
     if(FLAGS[0] == 1 && FLAGS[1] == 0) FLAGS[3] = 1; //MAYOR
     else FLAGS[3] = 0;
+
     
-    switch (des) //Desplasamientos
-    {
-    case 1:
-        OC = OC << 1;
-        break;
-    case 2:
-        OC = OC >> 1;
-        break;
-    default:
-        break;
-    }
+    OC = YQS(7,des,OC);
 
     if(no == 1) OC = ~OC;
     
     R = static_cast<uint8_t>(OC);
     
-    REJ_D= R;
+    REJ_ABC[DA]= R;
     return R;
 } 
 
-uint8_t REJ(uint8_t SO,uint8_t IN,bool MOV,uint8_t M_SEL,uint8_t MOD,uint8_t DATA,uint8_t RAM,bool SET){
-    
-    if(MOD == 0){ // Copiar = CLN
+void REJ(uint8_t RSO,uint8_t RSI,uint8_t data,bool mode,uint8_t OP){
+    if(OP == 1){ // SET
 
-        if(M_SEL == 1){  // REJ_ABC = D
+        REJ_ABC[RSI] = data;
 
-            REJ_ABC[IN] = REJ_D;
+    }else if(OP == 2){
 
-        }else if(M_SEL == 2){ //Copiar valor de ram en registro IO.
+        REJ_ABC[RSI] = REJ_ABC[RSO]; // MOVE
 
-            REJ_IO = RAM;
+    }else if(OP == 3){
 
-        }
-    }else if(MOD == 1){
+        REJ_XY[RSI] = data; //LOAD
 
-        if(M_SEL == 1){ //Copia balor de rej IO a un rejistro comun.
+    }else if(OP == 4){ //IOC
 
-            REJ_ABC[IN] = REJ_IO;
+        if(mode == 0){
 
-        }else if(M_SEL == 2){ // Copia C en rej X.
+            REJ_ABC[RSO] = REJ_IO; //Rejistro comun es igual a Rejistro de interfas
 
-            REJ_XY[0] = REJ_ABC[3];
+        }else {
 
-        }else if(M_SEL == 3){ // Copia C en rej Y.
-
-            REJ_XY[1] = REJ_ABC[3];
+            REJ_IO = REJ_ABC[RSO]; //Rejistro de interfas es igal a un rejistro comun 
 
         }
+
     }
-    if(MOV == 1) REJ_ABC[IN] = REJ_ABC[SO];REJ_ABC[0] = 0; //MOV
-    if(SET == 1) REJ_ABC[IN] = DATA; REJ_ABC[0] = 0;
-    switch (SO)
-    {
-    case 1:
-        return REJ_ABC[1];
-        break;
-    case 2:
-        return REJ_ABC[2];
-        break;
-    case 3:
-        return REJ_ABC[3];
-        break;
-    default:
-        return 0;
-        break;
-    }
-    
 }
 
+
+
+uint8_t SP = 0;
 void DC(uint8_t J,uint8_t FLAG){
     if(J == 0){
         DIR++; //Funcion normal
     }else if(J == 1){
         DIR = (static_cast<uint16_t>(REJ_XY[1]) << 8) | REJ_XY[0]; //JMP
     }else if(J == 2){ //CJM (Condicional JMP)
-        uint8_t COM =   FLAGS[0] << 0 |
-                        FLAGS[1] << 1 |
-                        FLAGS[2] << 2 |
-                        FLAGS[3] << 3;
-        if(COM == FLAG){
+        bool L = 0;
+        switch(FLAG){
+            case 0:
+                if(FLAGS[0] == 1){
+                    L = 1;
+                }
+                break;
+            case 1:
+                if(FLAGS[1] == 1){
+                    L = 1;
+                }
+                break;
+            case 2:
+                if(FLAGS[2] == 1){
+                    L = 1;
+                }
+                break;
+            case 3:
+                if(FLAGS[3] == 1){
+                    L = 1;
+                }
+                break;
+            default:
+                break;
+        }
+        if(L == 1){
             DIR = (static_cast<uint16_t>(REJ_XY[1]) << 8) | REJ_XY[0]; //CJM
+        }
+    }else if (J == 3) { // CALL
+    if (SP < 16) {
+        DC(1,0);
+        PIL[SP] = DIR;
+        SP++;
+    }
+
+    } else if (J == 4) { // RETURN
+        if (SP > 0) {
+        SP--;
+        DIR = PIL[SP];
         }
     }
     
@@ -142,7 +159,7 @@ void DC(uint8_t J,uint8_t FLAG){
 
 
 
-//REJ(uint8_t SO,uint8_t IN,bool MOV,uint8_t M_SEL,uint8_t MOD,uint8_t DATA,uint8_t RAM)
+
 void PL_EXE(uint16_t PRG){
     uint16_t OP = PRG >> 11;
     switch (OP)
@@ -157,22 +174,42 @@ void PL_EXE(uint16_t PRG){
         ALU(OP, ((PRG>>9) & 0b11),(PRG>>7) & 0b11,(PRG>>5)& 0b11,(PRG >> 4) & 0b1); // ALU
         break;
     case 8:
+        EscribirMemoria((static_cast<uint16_t>(REJ_XY[1]) <<8) | REJ_XY[0],REJ_IO); //WRM
+        break;
     case 9:
+        REJ_IO = LeerMemoria((static_cast<uint16_t>(REJ_XY[1]) <<8) | REJ_XY[0]); //RRM
         break;
     case 10:
-        REJ((PRG >> 8) & 0b11,(PRG>>6)& 0b11,1,0,0,0,0,0); // MOV
+        REJ((PRG >> 8) & 0b11,(PRG >> 6) & 0b11,0,0,2); // MOV
         break;
     case 11:
-        REJ(0,(PRG >>6)& 0b11,0,(PRG >>8)& 0b11,(PRG >> 10)& 0b1,0,0,0); //CLN
+        REJ((PRG >> 8) & 0b11,0,0,(PRG >> 10) & 0b1,4); //IOC
+        
         break;
     case 12:
         DC(1,0); //JMP
         break;
     case 13:
-        DC(1,(PRG >>7) & 0b1111); //CJP
+        DC(2,(PRG >>10) & 0b11); //CJP
         break;
     case 14:
-        REJ(0,(PRG >> 8)& 0b11,0,1,0,PRG & 0b11111111,0,1); // SET
+        REJ(0,(PRG >> 8) & 0b11,PRG & 0xFF,0,1); // SET
+        break;
+    case 15:
+        REJ(0,(PRG>> 10) & 0b1,PRG & 0xFF,0,3); // LOD
+        
+        break;
+    case 16:
+        REJ_ABC[(PRG >> 8) & 0b11] = YQS((PRG >> 10) & 0b1,0,REJ_ABC[(PRG >> 8) & 0b11]); // DES
+        break;
+    case 17:
+        REJ_ABC[(PRG >> 8) & 0b11] = ~REJ_ABC[(PRG >> 8) & 0b11]; // NOP
+        break;
+    case 18:
+        DC(3,0); //CALL
+        break;
+    case 19:
+        DC(4,0); //RET
         break;
     default:
         break;
